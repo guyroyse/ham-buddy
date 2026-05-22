@@ -13,7 +13,7 @@ Ham-buddy is an agent that controls a Yaesu FT-991 ham radio, listens to its rec
 | Radio                 | Yaesu FT-991 via hamlib's `rigctld` (spawned subprocess + TCP)                               | done    |
 | Enricher              | LangGraph.js workflow: correction → fan-out to NER / callsigns+roles / frequencies (gpt-4o-mini, strict JSON schema via Zod) | done    |
 | Memory                | Redis Agent Memory REST API (private preview)                                                | not yet |
-| Chatbot               | LangGraph chat agent with `tuneRig` tool (status + memory-query tools pending)               | partial |
+| Chatbot               | LangGraph chat agent with `tuneRig` + `queryRig` tools (memory-query tools pending)          | partial |
 | UI                    | Ink TUI                                                                                      | not yet |
 
 ## External tools required
@@ -67,6 +67,7 @@ src/
       radio-using-responder.ts   wraps createAgent.invoke() as a graph node
     tools/
       tune-rig.ts                tuneRig tool — sets Rig.instance.frequency / .mode
+      query-rig.ts               queryRig tool — reads Rig.instance.frequency / .mode / .band
   config/
     config.ts          dotenv-loaded config
   enricher/
@@ -133,7 +134,7 @@ Topology is one node: `START → "agent" → END`. The `"agent"` node is `radioU
 
 **Why a node wrapper instead of adding the agent as a node directly**: `createReactAgent` returned a `CompiledStateGraph` you could pass straight to `addNode`. The replacement `createAgent` returns a `ReactAgent` wrapper class; it exposes the underlying graph via `.graph`, but the JS types don't currently line up to use it as a node — see [langgraphjs#1767](https://github.com/langchain-ai/langgraphjs/issues/1767). The wrapper-node pattern (instantiate the agent once at module scope; node function calls `.invoke()` and reshapes the result) is the documented workaround. When the parity bug is fixed this can collapse to `builder.addNode('agent', agent.graph)`.
 
-The `tuneRig` tool in `tools/tune-rig.ts` is a top-level `tool()` const — no factory — because it reaches for `Rig.instance` like everything else. The Zod schema makes both `frequency` (hertz) and `mode` (`Mode` enum) optional; the tool body short-circuits to a no-op message if neither is provided.
+The rig tools in `tools/` are top-level `tool()` consts — no factories — because they reach for `Rig.instance` like everything else. `tuneRig` takes optional `frequency` (hertz) and `mode` (`Mode` enum) and short-circuits to a no-op message if neither is provided. `queryRig` takes no arguments and returns a human-readable summary of `Rig.instance.frequency` / `.mode` / `.band` (with `unknown` for any null fields, in case the first poll hasn't completed).
 
 ### Rig as a singleton
 
@@ -185,5 +186,5 @@ The protocol is one command per line. Commands prefixed with `+` get extended/la
 In order:
 
 1. **Memory** — Redis Agent Memory REST client. POST each `EnrichedTransmission` (from `enrichTransmission()`) to `/v1/stores/{storeId}/session-memory`, recall via `/long-term-memory/search`. Auth: `Bearer <API_KEY>`. Env vars `MEMORY_API_HOST` / `MEMORY_API_KEY` / `MEMORY_STORE_ID` are already wired through `config.ts`.
-2. **Chatbot — remaining tools + memory** — `tuneRig` is shipped. Still to add: `getRigStatus` (reads `Rig.instance`), and memory-query tools (`recallMemory`, `searchTranscripts`) once the memory client lands. When memory is wired in, the chatbot's `MessagesAnnotation`-only state grows to include recalled memories; the topology likely becomes `START → recall → agent → remember → END` rather than the current single-node graph.
+2. **Chatbot — memory tools** — `tuneRig` and `queryRig` are shipped. Still to add: memory-query tools (`recallMemory`, `searchTranscripts`) once the memory client lands. When memory is wired in, the chatbot's `MessagesAnnotation`-only state grows to include recalled memories; the topology likely becomes `START → recall → agent → remember → END` rather than the current single-node graph.
 3. **UI** — Ink TUI. Single-process app combining `ingest()`, the chat agent, and three panes: chat / live transcripts / rig status. This is where `ingest()` gets called back into life — `main.ts` will start it alongside the TUI render loop.
