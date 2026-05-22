@@ -10,6 +10,8 @@ export { Mode } from './modes.js'
 const POLL_INTERVAL_MS = 100
 
 export class Rig {
+  static #instance: Rig | null = null
+
   #frequency: number | null = null
   #mode: Mode | null = null
   #band: Band | null = null
@@ -24,18 +26,27 @@ export class Rig {
   }
 
   static async connect(): Promise<Rig> {
+    if (Rig.#instance !== null) return Rig.#instance
+
     const { model, port, baud } = config.rig
     if (!model) throw new Error('RIG_MODEL is not set in .env')
     if (!port) throw new Error('RIG_PORT is not set in .env')
     if (!baud) throw new Error('RIG_BAUD is not set in .env')
 
     const socket = await RigCtlD_Socket.open(model, port, baud)
-    return new Rig(socket)
+    Rig.#instance = new Rig(socket)
+    return Rig.#instance
+  }
+
+  static get instance(): Rig {
+    if (Rig.#instance === null) throw new Error('Rig not connected — call Rig.connect() first')
+    return Rig.#instance
   }
 
   close(): void {
     clearInterval(this.#pollTimer)
     this.#socket.close()
+    Rig.#instance = null
   }
 
   get frequency(): number | null {

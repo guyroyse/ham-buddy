@@ -1,37 +1,13 @@
-import dedent from 'dedent'
-import { StateGraph, START, END } from '@langchain/langgraph'
-import { createReactAgent } from '@langchain/langgraph/prebuilt'
+import { HumanMessage } from '@langchain/core/messages'
 
-import { fetchChatModel } from '@models/models'
-import { Rig } from '@rig/rig'
+import { graph } from './graph.js'
 
-import { ChatbotStateAnnotation } from './state.js'
-import { tuneRig } from './tools/tune-rig.js'
+export async function chat(message: string): Promise<string> {
+  const inputState = { messages: new HumanMessage(message) }
 
-const SYSTEM_PROMPT = dedent`
-  You are ham-buddy, an assistant for an amateur radio operator. The user
-  is talking to you to control their Yaesu FT-991 transceiver and to ask
-  about ham radio.
+  const finalState = await graph.invoke(inputState)
 
-  You have a tool, tuneRig, that changes the rig's frequency and/or mode.
-  Frequencies must be passed in hertz — convert from MHz or kHz before
-  calling. Modes are one of: LSB, USB, CW, FM, AM, RTTY, RTTYR, CWR,
-  PKTLSB, PKTUSB, PKTFM, C4FM.
-
-  Be brief. Confirm tool actions in plain language.
-`
-
-export function buildChatbot(rig: Rig) {
-  const agent = createReactAgent({
-    llm: fetchChatModel(),
-    tools: [tuneRig(rig)],
-    prompt: SYSTEM_PROMPT
-  })
-
-  const builder = new StateGraph(ChatbotStateAnnotation) as any
-  builder.addNode('agent', agent)
-  builder.addEdge(START, 'agent')
-  builder.addEdge('agent', END)
-
-  return builder.compile()
+  const lastMessage = finalState.messages[finalState.messages.length - 1]
+  const content = lastMessage?.content
+  return typeof content === 'string' ? content : ''
 }

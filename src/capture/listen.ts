@@ -18,14 +18,14 @@ export type Transcript = {
    not after transcription, which can take seconds. The capture pipeline's
    lifecycle is tied to the iteration: break (or .return()) cleanly tears it
    down via the finally block. */
-export async function* listen(rig: Rig): AsyncIterableIterator<Transcript> {
+export async function* listen(): AsyncIterableIterator<Transcript> {
   const controller = new AbortController()
   try {
     for await (const audioPath of captureUtterances(controller.signal)) {
       const capturedAt = new Date()
-      const frequency = rig.frequency
-      const mode = rig.mode
-      const band = rig.band
+      const frequency = Rig.instance.frequency
+      const mode = Rig.instance.mode
+      const band = Rig.instance.band
 
       const text = await transcribe(audioPath)
 

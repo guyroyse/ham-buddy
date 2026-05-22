@@ -1,9 +1,8 @@
 import { listen } from '@capture/listen'
-import { Rig } from '@rig/rig'
 import { enrichTransmission, EnrichedTransmission } from '@enricher/enricher'
 
-export async function ingest(rig: Rig): Promise<void> {
-  for await (const transcript of listen(rig)) {
+export async function ingest(): Promise<void> {
+  for await (const transcript of listen()) {
     const enriched = await enrichTransmission({
       text: transcript.text,
       receivedAt: transcript.capturedAt,

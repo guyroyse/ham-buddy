@@ -24,6 +24,7 @@
     "@langchain/openai": "^1.4.7",
     "dedent": "^1.7.2",
     "dotenv": "^16.6.1",
+    "langchain": "^1.4.2",
     "openai": "^6.38.0",
     "redis": "^5.12.1",
     "serialport": "^13.0.0",

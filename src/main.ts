@@ -2,13 +2,13 @@ import { createInterface } from 'node:readline/promises'
 
 import { Rig } from '@rig/rig'
 
-import { chat } from './chat.js'
+import { chat } from '@chatbot/chatbot'
 
-const rig = await Rig.connect()
+await Rig.connect()
 
 process.on('SIGINT', () => {
   console.log('\nstopping')
-  rig.close()
+  Rig.instance.close()
   process.exit(0)
 })
 
@@ -20,11 +20,11 @@ try {
   while (true) {
     const message = (await repl.question('> ')).trim()
     if (message === '') continue
-    const reply = await chat(rig, message)
+    const reply = await chat(message)
     console.log(reply + '\n')
   }
 } catch (err) {
   console.error('error:', (err as Error).message)
-  rig.close()
+  Rig.instance.close()
   process.exit(1)
 }
