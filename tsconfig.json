@@ -24,7 +24,8 @@
       "@config/*": ["./src/config/*"],
       "@models/*": ["./src/models/*"],
       "@rig/*": ["./src/rig/*"],
-      "@enricher/*": ["./src/enricher/*"]
+      "@enricher/*": ["./src/enricher/*"],
+      "@memory/*": ["./src/memory/*"]
     },
     "declaration": true,
     "declarationMap": true,

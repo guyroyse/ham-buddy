@@ -20,6 +20,9 @@ export const config = {
   },
   location: {
     context: env('LOCATION_CONTEXT', '')
+  },
+  user: {
+    name: env('USER_NAME', 'operator')
   }
 } as const
 

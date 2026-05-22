@@ -12,8 +12,8 @@ Ham-buddy is an agent that controls a Yaesu FT-991 ham radio, listens to its rec
 | Listener              | `listen()` async generator combining capture + transcribe + rig tag                          | done    |
 | Radio                 | Yaesu FT-991 via hamlib's `rigctld` (spawned subprocess + TCP)                               | done    |
 | Enricher              | LangGraph.js workflow: correction → fan-out to NER / callsigns+roles / frequencies (gpt-4o-mini, strict JSON schema via Zod) | done    |
-| Memory                | Redis Agent Memory REST API (private preview)                                                | not yet |
-| Chatbot               | LangGraph chat agent with `tuneRig` + `queryRig` tools (memory-query tools pending)          | partial |
+| Memory                | Redis Agent Memory via `@redis-iris/agent-memory` SDK (chat history wired; radio long-term pending) | partial |
+| Chatbot               | LangGraph chat agent with session memory (recall/respond/save) + `tuneRig` + `queryRig` tools (memory-query tools pending) | partial |
 | UI                    | Ink TUI                                                                                      | not yet |
 
 ## External tools required
@@ -61,13 +61,17 @@ src/
     listen.ts          joins capture + transcribe + Rig.instance snapshot → Transcript stream
   chatbot/
     chatbot.ts         entry point: chat(message) → reply string
-    graph.ts           LangGraph StateGraph wiring (single 'agent' node over MessagesAnnotation)
-    state.ts           ChatbotStateAnnotation (= MessagesAnnotation) + ChatbotState type
+    graph.ts           LangGraph StateGraph wiring (3 nodes: enrich → respond → save)
+    state.ts           ChatbotStateAnnotation (sessionId / username / userMessage / promptMessages / responseMessage) + ChatbotState type
     nodes/
-      radio-using-responder.ts   wraps createAgent.invoke() as a graph node
+      prompt-enricher.ts         fetches session history from Agent Memory; builds promptMessages
+      radio-using-responder.ts   runs the createAgent over promptMessages; sets responseMessage
+      memory-saver.ts            writes user + assistant turns back to Agent Memory
     tools/
       tune-rig.ts                tuneRig tool — sets Rig.instance.frequency / .mode
       query-rig.ts               queryRig tool — reads Rig.instance.frequency / .mode / .band
+  memory/
+    client.ts          configured AgentMemory SDK instance + per-process sessionId (ULID)
   config/
     config.ts          dotenv-loaded config
   enricher/
@@ -128,13 +132,28 @@ The text-corrector's system prompt optionally gets a "Local context" block appen
 
 ### Chatbot graph
 
-`src/chatbot/` mirrors the enricher's layout: `chatbot.ts` (entry: `chat(message)`), `graph.ts`, `state.ts`, `nodes/`, `tools/`. State is `MessagesAnnotation` re-exported as `ChatbotStateAnnotation` — the placeholder shape so memory-related fields can be added there later. The compiled graph is module-level (no per-call factory); `chat(message)` just builds `{ messages: new HumanMessage(message) }` and invokes it.
+`src/chatbot/` mirrors the enricher's layout: `chatbot.ts` (entry: `chat(message)`), `graph.ts`, `state.ts`, `nodes/`, `tools/`. State is a custom `Annotation.Root` with five named fields — `sessionId`, `username`, `userMessage`, `promptMessages`, `responseMessage` — NOT `MessagesAnnotation`. The shape was lifted from `guyroyse/ai-news-agent`'s chatbot workflow, which uses the same Redis Agent Memory recall/respond/save pattern; `username` is a ham-buddy addition so the caller threads identity into the workflow.
 
-Topology is one node: `START → "agent" → END`. The `"agent"` node is `radioUsingResponder` in `nodes/`, which holds the `createAgent` instance (from the `langchain` package — not the deprecated `createReactAgent` from `@langchain/langgraph/prebuilt`) at module scope, then calls `agent.invoke()` inside an async node function.
+Topology is three nodes: `START → prompt-enricher → radio-using-responder → memory-saver → END`.
+
+- **prompt-enricher** (`nodes/prompt-enricher.ts`): reads `sessionId` from state, calls `agentMemory.getSessionMemory(sessionId)`, maps `SessionEvent[]` to `BaseMessage[]` (`USER` → `HumanMessage`, `ASSISTANT` → `AIMessage`, `SYSTEM` → `SystemMessage`), appends the current `userMessage` as a `HumanMessage`, returns `{ promptMessages }`. A 404 on the first turn of a new session is caught and treated as empty history.
+- **radio-using-responder** (`nodes/radio-using-responder.ts`): holds the `createAgent` instance (from the `langchain` package — not the deprecated `createReactAgent` from `@langchain/langgraph/prebuilt`) at module scope. Invokes it with `{ messages: state.promptMessages }`, extracts the final message's string content, returns `{ responseMessage }`. See "Why a node wrapper instead of adding the agent as a node directly" below.
+- **memory-saver** (`nodes/memory-saver.ts`): writes two `addSessionEvent` calls — `actorId: state.username` + `role: 'USER'` for the input, then `actorId: 'ham-buddy'` + `role: 'ASSISTANT'` for the reply. The first user turn's actorId becomes the session's permanent `ownerId` (set by the service from the actorId of the first event), so the user's name doubles as the session owner — useful as a search filter later. Tool-call messages from the agent's internal loop are NOT persisted; only the user input and the final assistant text. The closed `MessageRole` enum (`USER | ASSISTANT | SYSTEM`) doesn't include `TOOL`, so faithful tool-dance replay isn't an option without serializing into `metadata`.
+
+`chat(message, username)` imports the `sessionId` from `@memory/client` and invokes the graph with `{ sessionId, username, userMessage: message }`. Returns `finalState.responseMessage`. `main.ts` sources `username` from `config.user.name` (env var `USER_NAME`, defaults to `'operator'`) — set it to your callsign to get per-callsign filtering on future long-term-memory recall.
 
 **Why a node wrapper instead of adding the agent as a node directly**: `createReactAgent` returned a `CompiledStateGraph` you could pass straight to `addNode`. The replacement `createAgent` returns a `ReactAgent` wrapper class; it exposes the underlying graph via `.graph`, but the JS types don't currently line up to use it as a node — see [langgraphjs#1767](https://github.com/langchain-ai/langgraphjs/issues/1767). The wrapper-node pattern (instantiate the agent once at module scope; node function calls `.invoke()` and reshapes the result) is the documented workaround. When the parity bug is fixed this can collapse to `builder.addNode('agent', agent.graph)`.
 
 The rig tools in `tools/` are top-level `tool()` consts — no factories — because they reach for `Rig.instance` like everything else. `tuneRig` takes optional `frequency` (hertz) and `mode` (`Mode` enum) and short-circuits to a no-op message if neither is provided. `queryRig` takes no arguments and returns a human-readable summary of `Rig.instance.frequency` / `.mode` / `.band` (with `unknown` for any null fields, in case the first poll hasn't completed).
+
+### Memory client
+
+`src/memory/client.ts` exports two module-level singletons:
+
+- `agentMemory` — the `AgentMemory` SDK instance from `@redis-iris/agent-memory` (Speakeasy-generated, pinned to an exact version in `package.json` since the SDK is private-preview and may break). Configured from `config.memory` (host / storeId / apiKey).
+- `sessionId` — a fresh ULID (`ulid` package, not `ulidx` — see comparison: `ulid` is more recently maintained as of 2026). One session per process run, by design: each `npm run dev` gives the chatbot a clean conversation context. ULID over UUID so session lists can be sorted lexicographically by creation time.
+
+Long-term memory (enriched radio transmissions) is not yet wired in; when it lands, it'll use `agentMemory.bulkCreateLongTermMemories` from inside `ingest()` and `agentMemory.searchLongTermMemory` from chatbot recall tools.
 
 ### Rig as a singleton
 
@@ -175,7 +194,7 @@ The protocol is one command per line. Commands prefixed with `+` get extended/la
 - **Constants first, then functions**: module-level data (prompts, schemas, cached singletons) lives above the function declarations that use it. See `capture/transcribe.ts` and the enricher node files for the pattern.
 - **`function foo()` declarations** for named module-level functions, not `const foo = () => ...`. Arrow functions are fine inline for callbacks.
 - **Full words for variable names**, not abbreviations or single letters: `frequency` not `hz`, `mode` not `m`, `megahertz` not `mhz`, `command` not `cmd`, `previousLine` not `last`. Trivial loop indices can stay short.
-- **Path aliases**: cross-folder imports use `@capture/...`, `@chatbot/...`, `@config/...`, `@enricher/...`, `@models/...`, `@rig/...` rather than `../../foo.js`. Same-folder imports stay relative (`./foo.js`). The aliases are configured in `tsconfig.json` paths; `tsc-alias -f` rewrites them to relative `.js` specifiers at build time. `tsx` (dev) resolves them natively.
+- **Path aliases**: cross-folder imports use `@capture/...`, `@chatbot/...`, `@config/...`, `@enricher/...`, `@memory/...`, `@models/...`, `@rig/...` rather than `../../foo.js`. Same-folder imports stay relative (`./foo.js`). The aliases are configured in `tsconfig.json` paths; `tsc-alias -f` rewrites them to relative `.js` specifiers at build time. `tsx` (dev) resolves them natively.
 - **Imports omit the `.js` extension on aliased paths** (`'@models/models'`), but keep it on relative paths (`'./state.js'`) — required because we use `moduleResolution: bundler` for permissive typecheck, and tsc-alias adds the extension at emit time for Node ESM compatibility.
 - **Logging**: errors are logged inline via `console.error` at the call site (see Rig methods). No external logger; don't add one without a reason.
 - Strict mode is on; no `any` cheats (with one deliberate exception in `enricher/graph.ts` where LangGraph's chained builder type is awkward).
@@ -185,6 +204,6 @@ The protocol is one command per line. Commands prefixed with `+` get extended/la
 
 In order:
 
-1. **Memory** — Redis Agent Memory REST client. POST each `EnrichedTransmission` (from `enrichTransmission()`) to `/v1/stores/{storeId}/session-memory`, recall via `/long-term-memory/search`. Auth: `Bearer <API_KEY>`. Env vars `MEMORY_API_HOST` / `MEMORY_API_KEY` / `MEMORY_STORE_ID` are already wired through `config.ts`.
-2. **Chatbot — memory tools** — `tuneRig` and `queryRig` are shipped. Still to add: memory-query tools (`recallMemory`, `searchTranscripts`) once the memory client lands. When memory is wired in, the chatbot's `MessagesAnnotation`-only state grows to include recalled memories; the topology likely becomes `START → recall → agent → remember → END` rather than the current single-node graph.
+1. **Long-term memory for radio transmissions** — `ingest()` should call `agentMemory.bulkCreateLongTermMemories` for each `EnrichedTransmission`. Schema: `{ text: enriched.correctedText, memoryType: 'episodic', metadata: { ... callsigns / band / mode / frequency / receivedAt ... } }` for filterable recall. Auto-promotion from session memory is a separate path the service offers; we want explicit inserts so we control the metadata.
+2. **Chatbot — memory-query tools** — `tuneRig` and `queryRig` are shipped, and session chat history works. Still to add: `searchTranscripts({ query, callsign?, band?, since? })` calling `agentMemory.searchLongTermMemory(...)`. Probably becomes a new tool file alongside `tune-rig.ts` / `query-rig.ts`.
 3. **UI** — Ink TUI. Single-process app combining `ingest()`, the chat agent, and three panes: chat / live transcripts / rig status. This is where `ingest()` gets called back into life — `main.ts` will start it alongside the TUI render loop.

@@ -1,5 +1,5 @@
 import dedent from 'dedent'
-import { createAgent, SystemMessage } from 'langchain'
+import { createAgent } from 'langchain'
 
 import { ChatbotState } from '@chatbot/state'
 import { fetchChatModel } from '@models/models'
@@ -26,13 +26,8 @@ const tools = [tuneRig, queryRig]
 const agent = createAgent({ model, tools, systemPrompt: SYSTEM_PROMPT })
 
 export async function radioUsingResponder(state: ChatbotState): Promise<Partial<ChatbotState>> {
-  const systemMessage = new SystemMessage(SYSTEM_PROMPT)
-  const humanMessage = state.messages[state.messages.length - 1]
-  const inputMessages = [systemMessage, humanMessage]
-
-  const result = await agent.invoke({ messages: inputMessages })
-
-  const outputMessage = result.messages[result.messages.length - 1]
-
-  return { messages: [outputMessage] }
+  const result = await agent.invoke({ messages: state.promptMessages })
+  const finalMessage = result.messages[result.messages.length - 1]
+  const responseMessage = typeof finalMessage.content === 'string' ? finalMessage.content : ''
+  return { responseMessage }
 }
