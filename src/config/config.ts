@@ -17,6 +17,9 @@ export const config = {
   audio: {
     device: env('AUDIO_DEVICE', '0'),
     outputDir: env('AUDIO_OUTPUT_DIR', './captures')
+  },
+  location: {
+    context: env('LOCATION_CONTEXT', '')
   }
 } as const
 

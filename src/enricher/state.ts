@@ -4,7 +4,7 @@ import type { FrequencyMention } from '@enricher/nodes/frequencies-extractor'
 import type { NamedEntities } from '@enricher/nodes/named-entities-extractor'
 
 export const EnrichmentStateAnnotation = Annotation.Root({
-  rawText: Annotation<string>,
+  text: Annotation<string>,
   correctedText: Annotation<string>,
   entities: Annotation<NamedEntities>,
   callsigns: Annotation<Callsigns>,

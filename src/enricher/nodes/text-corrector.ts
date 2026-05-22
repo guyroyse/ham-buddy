@@ -1,9 +1,10 @@
 import dedent from 'dedent'
 
+import { config } from '@config/config'
 import { fetchChatModel } from '@models/models'
 import type { EnrichmentState } from '@enricher/state'
 
-const PROMPT = dedent`
+const BASE_PROMPT = dedent`
   You are cleaning up transcripts of amateur (ham) radio conversations.
   The audio came from OpenAI Whisper and may have misheard ham jargon.
 
@@ -49,11 +50,22 @@ const PROMPT = dedent`
   - Band numbers spelled out as words — leave them as digits.
 `
 
+const PROMPT = config.location.context
+  ? dedent`
+      ${BASE_PROMPT}
+
+      Local context (use this to disambiguate proper nouns Whisper may have
+      misheard — towns, repeaters, clubs, nets near the operator):
+
+      ${config.location.context}
+    `
+  : BASE_PROMPT
+
 export async function textCorrector(state: EnrichmentState): Promise<Partial<EnrichmentState>> {
   const response = await fetchChatModel().invoke([
     { role: 'system', content: PROMPT },
-    { role: 'user', content: state.rawText }
+    { role: 'user', content: state.text }
   ])
-  const correctedText = typeof response.content === 'string' ? response.content.trim() : state.rawText
+  const correctedText = typeof response.content === 'string' ? response.content.trim() : state.text
   return { correctedText }
 }

@@ -105,13 +105,15 @@ A persistent ffmpeg with per-utterance spawned sox processes failed: subsequent 
 
 ### Enricher graph
 
-The enricher is a LangGraph `StateGraph` defined in `src/enricher/graph.ts`. State is declared once in `state.ts` (`EnricherStateAnnotation`) and carries only the fields nodes read or write: `rawText`, `correctedText`, `entities`, `callsigns`, `frequenciesMentioned`. Each node takes `EnricherState` and returns `Partial<EnricherState>`.
+The enricher is a LangGraph `StateGraph` defined in `src/enricher/graph.ts`. State is declared once in `state.ts` (`EnricherStateAnnotation`) and carries only the fields nodes read or write: `text`, `correctedText`, `entities`, `callsigns`, `frequenciesMentioned`. Each node takes `EnricherState` and returns `Partial<EnricherState>`.
 
 Topology: `START → text-corrector → { named-entities-extractor, callsigns-extractor, frequencies-extractor } → END`. The three extractors run in parallel; LangGraph waits for all of them before terminating.
 
-`enrichTransmission()` in `enricher.ts` is the invocation layer: it invokes the compiled graph with just `{ rawText }`, then composes the final `EnrichedTransmission` by spreading the rig metadata from the input alongside the graph's output. The rig metadata never enters the graph — it's orthogonal to the graph's concern.
+`enrichTransmission()` in `enricher.ts` is the invocation layer: it invokes the compiled graph with just `{ text }`, then composes the final `EnrichedTransmission` by spreading the rig metadata from the input alongside the graph's output. The rig metadata never enters the graph — it's orthogonal to the graph's concern.
 
 Each extractor node owns its Zod schema and its inferred type (`Callsigns`, `FrequencyMention`, `NamedEntities`). `state.ts` imports those types. Extractors use `chat().withStructuredOutput(Schema, { strict: true })` so OpenAI's decoder is constrained to produce schema-valid output.
+
+The text-corrector's system prompt optionally gets a "Local context" block appended at module load from `LOCATION_CONTEXT` (via `config.location.context`) — a free-form description of the operator's QTH, nearby towns, local repeaters, and clubs. Helps the corrector fix Whisper mistranscriptions of local proper nouns that ham vocabulary alone can't cover (e.g. "Canoa" → "Genoa Township"). Empty/unset means the prompt is the universal ham-jargon version only.
 
 ### FT-991 specifics
 
