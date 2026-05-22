@@ -13,7 +13,7 @@ Ham-buddy is an agent that controls a Yaesu FT-991 ham radio, listens to its rec
 | Radio                 | Yaesu FT-991 via hamlib's `rigctld` (spawned subprocess + TCP)                               | done    |
 | Enricher              | LangGraph.js workflow: correction → fan-out to NER / callsigns+roles / frequencies (gpt-4o-mini, strict JSON schema via Zod) | done    |
 | Memory                | Redis Agent Memory REST API (private preview)                                                | not yet |
-| Chatbot               | LangGraph.js chat agent with rig-control + memory-query tools                                | not yet |
+| Chatbot               | LangGraph chat agent with `tuneRig` tool (status + memory-query tools pending)               | partial |
 | UI                    | Ink TUI                                                                                      | not yet |
 
 ## External tools required
@@ -33,8 +33,8 @@ brew install ffmpeg sox hamlib
 cp .env.example .env       # then fill in the values
 npm install
 npm run devices            # list audio inputs (for AUDIO_DEVICE) and serial ports (for RIG_PORT)
-npm run dev                # full pipeline via tsx (dev loop)
-npm run build && npm start # full pipeline from compiled output (dist/)
+npm run dev                # chat REPL via tsx (dev loop)
+npm run build && npm start # chat REPL from compiled output (dist/)
 ```
 
 The FT-991 enumerates as two USB-serial devices; pick the right one for `RIG_PORT`. See "FT-991 specifics" below.
@@ -45,9 +45,10 @@ There is no automated test suite. Verify changes by:
 
 - **typecheck / build** — `npm run build` runs `tsc && tsc-alias -f`, emitting JS to `dist/`. The `tsc-alias` step rewrites the TypeScript path aliases (`@capture/...` etc.) into relative paths Node ESM can resolve, and appends `.js` extensions. Use it to catch type errors; `npm start` runs the compiled output.
 - **dev loop** — `npm run dev` runs `src/main.ts` directly via `tsx`. tsx resolves path aliases natively. (Run as a one-shot, not in watch mode — the chat REPL reads stdin, which `tsx watch` intercepts.)
-- **full pipeline** — either `npm run dev` or `npm run build && npm start`: connects to the rig, iterates `listen(rig)`, feeds each transcript through `enrichTransmission`, and prints each `EnrichedTransmission`.
+- **chat REPL** — either `npm run dev` or `npm run build && npm start` connects the rig, then reads stdin and pipes each line through `chat()` from `@chatbot/chatbot`. Type "tune to 14.250 MHz USB" and watch the rig actually move. Needs the rig connected; audio is not needed for chat.
+- **listen + enrich pipeline** — `ingest()` in `src/ingest.ts` runs the full radio-capture flow (capture → transcribe → enrich → print). It was extracted from the old `main.ts` and is not currently called from `main.ts`; invoke it directly when verifying that side. Needs rig + audio.
 
-The full pipeline needs real hardware connected (rig + audio). If you can't run it, say so — don't claim a change is verified.
+Both sides need real hardware. If you can't run them, say so — don't claim a change is verified.
 
 ## File layout
 
@@ -57,13 +58,21 @@ src/
     capture.sh         bash pipeline: ffmpeg → sox, segments on silence
     capture.ts         async generator wrapping capture.sh; yields WAV paths
     transcribe.ts      OpenAI Whisper transcription (raw output)
-    listen.ts          joins capture + transcribe + rig snapshot → Transcript stream
+    listen.ts          joins capture + transcribe + Rig.instance snapshot → Transcript stream
+  chatbot/
+    chatbot.ts         entry point: chat(message) → reply string
+    graph.ts           LangGraph StateGraph wiring (single 'agent' node over MessagesAnnotation)
+    state.ts           ChatbotStateAnnotation (= MessagesAnnotation) + ChatbotState type
+    nodes/
+      radio-using-responder.ts   wraps createAgent.invoke() as a graph node
+    tools/
+      tune-rig.ts                tuneRig tool — sets Rig.instance.frequency / .mode
   config/
     config.ts          dotenv-loaded config
   enricher/
     enricher.ts        entry point: enrichTransmission(input) → EnrichedTransmission
     graph.ts           LangGraph StateGraph wiring (correct → fan out → end)
-    state.ts           EnricherStateAnnotation + EnricherState type
+    state.ts           EnrichmentStateAnnotation + EnrichmentState type
     nodes/
       text-corrector.ts             ham-aware cleanup of Whisper output
       named-entities-extractor.ts   people, places, organizations
@@ -72,24 +81,25 @@ src/
   models/
     models.ts          fetchChatModel() (ChatOpenAI) + fetchSpeechToTextModel() (OpenAI); cached
   rig/
-    rig.ts             Rig class — polls rigctld, exposes freq/mode/band
+    rig.ts             Rig singleton (Rig.connect() idempotent; Rig.instance static getter); polls rigctld
     rigctld-socket.ts  spawns rigctld, speaks its line-based TCP protocol
     bands.ts           Band enum + bandFor(frequency)
     modes.ts           Mode enum mirroring hamlib's mode strings
-  main.ts              entrypoint — connects rig, iterates listen(rig), enriches, prints
+  ingest.ts            ingest() — radio capture+enrich loop (extracted from old main.ts; not currently invoked)
+  main.ts              entrypoint — connects rig, runs chat REPL on stdin via @chatbot/chatbot
   scripts/             setup-time discovery utilities (devices)
 captures/              session output, one timestamped subdir per run (gitignored)
 ```
 
 ## Runtime data flow
 
-Three stages, met in `main.ts`:
+`main.ts` connects the rig and drives a chat REPL — reads stdin, calls `chat(message)` from `@chatbot/chatbot`, prints the reply. The listen+enrich pipeline still exists (`ingest()` in `src/ingest.ts`) but is not currently called; reattach it when the UI lands.
 
-- **Capture + transcribe**: `capture.sh` (long-lived ffmpeg | sox) → `captureUtterances()` yields WAV paths → `transcribe(path)` returns raw Whisper text → `listen(rig)` bundles each into a `Transcript` with a rig-state snapshot.
-- **Rig**: `Rig.connect()` spawns `rigctld` and opens a TCP socket via `RigCtlD_Socket` → `Rig` polls `+f` and `+m` every 100 ms, keeping `frequency` / `mode` / `band` fresh on the instance.
-- **Enrich**: `main.ts` feeds each `Transcript` into `enrichTransmission(input)` from `@enricher/enricher`, which runs the LangGraph workflow and returns an `EnrichedTransmission` (raw + corrected text + entities + callsigns + frequencies mentioned + the input metadata).
+Three subsystems:
 
-`listen(rig)` is the capture/rig join: for each WAV path from `captureUtterances`, snapshot `rig.frequency`/`rig.mode`/`rig.band` immediately (before the slow transcribe call), then await `transcribe()`, then `yield` a `Transcript`. Consumers do `for await (const transcript of listen(rig))`.
+- **Rig** (singleton): `Rig.connect()` spawns `rigctld` and opens a TCP socket via `RigCtlD_Socket`, then caches and returns the connected instance. The class polls `+f` and `+m` every 100 ms, keeping `Rig.instance.frequency` / `.mode` / `.band` fresh. Anyone — tools, `listen()`, a future status pane — reads from `Rig.instance` instead of having the rig threaded in as a parameter.
+- **Chatbot**: `chat(message)` → compiled `graph.invoke({ messages: ... })` → single `radioUsingResponder` node → returns the agent's final message text. The `tuneRig` tool mutates `Rig.instance` directly. Stateless per call — no memory between `chat()` invocations yet.
+- **Capture + transcribe + enrich** (currently inert): `ingest()` iterates `listen()` (capture.sh → sox segments → Whisper → Rig.instance snapshot) and feeds each `Transcript` into `enrichTransmission()`, printing the result. `listen()` snapshots rig state at WAV-close time, before the slow transcribe call, so metadata reflects when the audio was captured — not seconds later.
 
 ## Architecture notes
 
@@ -105,7 +115,7 @@ A persistent ffmpeg with per-utterance spawned sox processes failed: subsequent 
 
 ### Enricher graph
 
-The enricher is a LangGraph `StateGraph` defined in `src/enricher/graph.ts`. State is declared once in `state.ts` (`EnricherStateAnnotation`) and carries only the fields nodes read or write: `text`, `correctedText`, `entities`, `callsigns`, `frequenciesMentioned`. Each node takes `EnricherState` and returns `Partial<EnricherState>`.
+The enricher is a LangGraph `StateGraph` defined in `src/enricher/graph.ts`. State is declared once in `state.ts` (`EnrichmentStateAnnotation`) and carries only the fields nodes read or write: `text`, `correctedText`, `entities`, `callsigns`, `frequenciesMentioned`. Each node takes `EnrichmentState` and returns `Partial<EnrichmentState>`.
 
 Topology: `START → text-corrector → { named-entities-extractor, callsigns-extractor, frequencies-extractor } → END`. The three extractors run in parallel; LangGraph waits for all of them before terminating.
 
@@ -114,6 +124,22 @@ Topology: `START → text-corrector → { named-entities-extractor, callsigns-ex
 Each extractor node owns its Zod schema and its inferred type (`Callsigns`, `FrequencyMention`, `NamedEntities`). `state.ts` imports those types. Extractors use `chat().withStructuredOutput(Schema, { strict: true })` so OpenAI's decoder is constrained to produce schema-valid output.
 
 The text-corrector's system prompt optionally gets a "Local context" block appended at module load from `LOCATION_CONTEXT` (via `config.location.context`) — a free-form description of the operator's QTH, nearby towns, local repeaters, and clubs. Helps the corrector fix Whisper mistranscriptions of local proper nouns that ham vocabulary alone can't cover (e.g. "Canoa" → "Genoa Township"). Empty/unset means the prompt is the universal ham-jargon version only.
+
+### Chatbot graph
+
+`src/chatbot/` mirrors the enricher's layout: `chatbot.ts` (entry: `chat(message)`), `graph.ts`, `state.ts`, `nodes/`, `tools/`. State is `MessagesAnnotation` re-exported as `ChatbotStateAnnotation` — the placeholder shape so memory-related fields can be added there later. The compiled graph is module-level (no per-call factory); `chat(message)` just builds `{ messages: new HumanMessage(message) }` and invokes it.
+
+Topology is one node: `START → "agent" → END`. The `"agent"` node is `radioUsingResponder` in `nodes/`, which holds the `createAgent` instance (from the `langchain` package — not the deprecated `createReactAgent` from `@langchain/langgraph/prebuilt`) at module scope, then calls `agent.invoke()` inside an async node function.
+
+**Why a node wrapper instead of adding the agent as a node directly**: `createReactAgent` returned a `CompiledStateGraph` you could pass straight to `addNode`. The replacement `createAgent` returns a `ReactAgent` wrapper class; it exposes the underlying graph via `.graph`, but the JS types don't currently line up to use it as a node — see [langgraphjs#1767](https://github.com/langchain-ai/langgraphjs/issues/1767). The wrapper-node pattern (instantiate the agent once at module scope; node function calls `.invoke()` and reshapes the result) is the documented workaround. When the parity bug is fixed this can collapse to `builder.addNode('agent', agent.graph)`.
+
+The `tuneRig` tool in `tools/tune-rig.ts` is a top-level `tool()` const — no factory — because it reaches for `Rig.instance` like everything else. The Zod schema makes both `frequency` (hertz) and `mode` (`Mode` enum) optional; the tool body short-circuits to a no-op message if neither is provided.
+
+### Rig as a singleton
+
+`Rig.connect()` is idempotent: it caches the connected instance in a private static field and returns the same instance on every call. `Rig.instance` is a static getter that returns it (throwing if `connect()` hasn't run yet). `rig.close()` clears the cache so a future `Rig.connect()` would reconnect.
+
+The pattern is here because the rig is genuinely process-singleton — one rig per process — and threading it through every signature (tool definitions, `listen()`, graph nodes, the chatbot entry, future status panes) was noise. Consumers just import `Rig` and read `Rig.instance.frequency` etc. The cost is that the dependency on a connected rig is implicit at call sites; `main.ts` is responsible for ensuring `await Rig.connect()` runs before anything reads `Rig.instance`.
 
 ### FT-991 specifics
 
@@ -148,7 +174,7 @@ The protocol is one command per line. Commands prefixed with `+` get extended/la
 - **Constants first, then functions**: module-level data (prompts, schemas, cached singletons) lives above the function declarations that use it. See `capture/transcribe.ts` and the enricher node files for the pattern.
 - **`function foo()` declarations** for named module-level functions, not `const foo = () => ...`. Arrow functions are fine inline for callbacks.
 - **Full words for variable names**, not abbreviations or single letters: `frequency` not `hz`, `mode` not `m`, `megahertz` not `mhz`, `command` not `cmd`, `previousLine` not `last`. Trivial loop indices can stay short.
-- **Path aliases**: cross-folder imports use `@capture/...`, `@config/...`, `@enricher/...`, `@models/...`, `@rig/...` rather than `../../foo.js`. Same-folder imports stay relative (`./foo.js`). The aliases are configured in `tsconfig.json` paths; `tsc-alias -f` rewrites them to relative `.js` specifiers at build time. `tsx` (dev) resolves them natively.
+- **Path aliases**: cross-folder imports use `@capture/...`, `@chatbot/...`, `@config/...`, `@enricher/...`, `@models/...`, `@rig/...` rather than `../../foo.js`. Same-folder imports stay relative (`./foo.js`). The aliases are configured in `tsconfig.json` paths; `tsc-alias -f` rewrites them to relative `.js` specifiers at build time. `tsx` (dev) resolves them natively.
 - **Imports omit the `.js` extension on aliased paths** (`'@models/models'`), but keep it on relative paths (`'./state.js'`) — required because we use `moduleResolution: bundler` for permissive typecheck, and tsc-alias adds the extension at emit time for Node ESM compatibility.
 - **Logging**: errors are logged inline via `console.error` at the call site (see Rig methods). No external logger; don't add one without a reason.
 - Strict mode is on; no `any` cheats (with one deliberate exception in `enricher/graph.ts` where LangGraph's chained builder type is awkward).
@@ -156,8 +182,8 @@ The protocol is one command per line. Commands prefixed with `+` get extended/la
 
 ## What's next
 
-Remaining "not yet" rows from the Stack table, in order:
+In order:
 
 1. **Memory** — Redis Agent Memory REST client. POST each `EnrichedTransmission` (from `enrichTransmission()`) to `/v1/stores/{storeId}/session-memory`, recall via `/long-term-memory/search`. Auth: `Bearer <API_KEY>`. Env vars `MEMORY_API_HOST` / `MEMORY_API_KEY` / `MEMORY_STORE_ID` are already wired through `config.ts`.
-2. **Chatbot** — LangGraph chat agent with tools: `setFrequency`, `setMode`, `getRigStatus`, `recallMemory`, `searchTranscripts`. This is where the natural-language frequency parsing ("tune to 14.250 USB" → `rig.frequency = 14_250_000; rig.mode = Mode.USB`) lives. Lives at `src/chatbot/` as a peer to `src/enricher/`.
-3. **UI** — Ink TUI. Single-process app combining the listener loop, the chat agent, and three panes: chat / live transcripts / rig status.
+2. **Chatbot — remaining tools + memory** — `tuneRig` is shipped. Still to add: `getRigStatus` (reads `Rig.instance`), and memory-query tools (`recallMemory`, `searchTranscripts`) once the memory client lands. When memory is wired in, the chatbot's `MessagesAnnotation`-only state grows to include recalled memories; the topology likely becomes `START → recall → agent → remember → END` rather than the current single-node graph.
+3. **UI** — Ink TUI. Single-process app combining `ingest()`, the chat agent, and three panes: chat / live transcripts / rig status. This is where `ingest()` gets called back into life — `main.ts` will start it alongside the TUI render loop.
