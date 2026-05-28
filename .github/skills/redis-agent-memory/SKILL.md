@@ -5,14 +5,14 @@ description: Build and debug TypeScript code using the @redis-iris/agent-memory 
 
 # Redis Agent Memory (TypeScript)
 
-Smart docs for the **Redis Cloud Agent Memory** service via the official Speakeasy-generated TypeScript SDK `@redis-iris/agent-memory`. Combines official docs, SDK type definitions, and empirical observations.
+Smart docs for the **Redis Agent Memory** service on **Redis Cloude** via the official Speakeasy-generated TypeScript SDK `@redis-iris/agent-memory`. Combines official docs, SDK type definitions, and empirical observations.
 
-**Scope note:** This skill covers the **Redis Cloud** service. There is also an open-source `redis/agent-memory-server` repo on GitHub. The two have diverged — **do not read the OSS source to infer cloud behavior.** Stick to the cloud docs, the SDK's `.d.ts` files, and direct empirical probing.
+**Scope note:** This skill covers the **Redis Cloud** service. There is also an open-source `redis/agent-memory-server` repo on GitHub. This is not the same product. **Do not read the OSS source or docs to infer behavior for Redis Agent Memory.** Stick to this skill, the cloud docs, the SDK's `.d.ts` files, and direct empirical probing.
 
 ## TL;DR
 
 - **Two tiers:** session memory (TTL'd, append-only JSON doc per session) and long-term memory (vector-embedded records, semantically searchable).
-- **Auto-promotion is async, slow, and opaque** — extracted records arrive with empty `namespace`/`topics` and an unreliable `memoryType`. For controlled metadata, write explicit `bulkCreateLongTermMemories`.
+- **Auto-promotion runs asynchronously** — extracted records arrive with empty `namespace`/`topics`, and the auto-chosen `memoryType` reflects the server-side classifier's interpretation — usually `episodic`'. For controlled metadata, write explicit `bulkCreateLongTermMemories`.
 - **Always import types from `@redis-iris/agent-memory/models`** — never inline structural shapes.
 - **`actorId` (on events) ≠ `ownerId` (on records).** The first event's `actorId` permanently becomes the session's `ownerId`; only `ownerId` is filterable.
 - Service is **preview** — pin the SDK version exactly (no caret).
@@ -56,19 +56,19 @@ Why:
 `MessageRole` and `MemoryType` are `ClosedEnum` — the full set of values:
 
 ```ts
-MessageRole = { User: "USER", Assistant: "ASSISTANT", System: "SYSTEM" }
-MemoryType  = { Semantic: "semantic", Episodic: "episodic", Message: "message" }
+MessageRole = { User: 'USER', Assistant: 'ASSISTANT', System: 'SYSTEM' }
+MemoryType = { Semantic: 'semantic', Episodic: 'episodic', Message: 'message' }
 ```
 
 `MessageRole` is intentionally limited to conversation I/O — see Session memory for what that means in practice.
 
 ## Session memory
 
-Ordered conversation events with a TTL. Use for live chat turns. A session is a single Redis JSON document — events are append-only and the whole document disappears when its TTL fires.
+Ordered conversation events with a TTL. Use for live chat turns. A session is stored as a single JSON document in Redis — events are append-only and the whole document disappears when its TTL fires.
 
-**Scope:** session memory stores the *conversation* — what the user said and what the agent said back. Tool calls and other internal agent steps are implementation detail and don't belong here; that's why the role enum is `USER | ASSISTANT | SYSTEM` only. If you need an audit trail of tool invocations, log it separately.
+**Scope:** session memory stores the _conversation_ — what the user said and what the agent said back. Tool calls and other internal agent steps are implementation detail and don't belong here; that's why the role enum is `USER | ASSISTANT | SYSTEM` only. If you need an audit trail of tool invocations, log it separately.
 
-Common tasks (see [Examples & References](#examples--references) for the full method reference):
+Common tasks:
 
 - **Append a chat turn** → [examples/store-chat-history](./examples/store-chat-history.md)
 - **Read session history** → [references/getSessionMemory](./references/get-session-memory.md)
@@ -78,26 +78,11 @@ Common tasks (see [Examples & References](#examples--references) for the full me
 
 Vector-embedded records with rich metadata. Memories are individually stored as Redis Hashes; search runs cosine-similarity over their embeddings with optional metadata filtering.
 
-Common tasks (see [Examples & References](#examples--references) for the full method reference):
+Common tasks:
 
 - **Save a memory** (store facts/episodes in bulk) → [references/bulkCreateLongTermMemories](./references/bulk-create-long-term-memories.md)
 - **Search memories** (semantic search with filters) → [references/searchLongTermMemory](./references/search-long-term-memory.md)
 - **Enrich a prompt** with recalled memories → [examples/enrich-context](./examples/enrich-context.md)
-
-### Filter reference
-
-| Filter       | Type     | Operators                      |
-| ------------ | -------- | ------------------------------ |
-| `sessionId`  | string   | `eq`, `ne`, `in`, `all`        |
-| `ownerId`    | string   | `eq`, `ne`, `in`, `all`        |
-| `namespace`  | string   | `eq`, `ne`, `in`, `all`        |
-| `topics`     | string   | `eq`, `ne`, `in`, `all`        |
-| `memoryType` | string   | `eq`, `ne`, `in`, `all`        |
-| `createdAt`  | ISO 8601 | `eq`, `gt`, `lt`, `gte`, `lte` |
-
-- `all` only meaningful for `topics`; `gt`/`lt`/`gte`/`lte` only for `createdAt`.
-- One operator per field per query.
-- Memory types and `createdAt` are filter-only — no type-specific or recency ranking. For recency weighting, rank client-side after the search returns.
 
 ### Memory types
 
@@ -107,7 +92,7 @@ Three types; names align with standard agent-memory terminology:
 - **`Episodic`** — what happened, when (timestamped).
 - **`Semantic`** — a fact or piece of knowledge, time/context stripped.
 
-The auto-classifier mis-types (see gotchas). Set the type explicitly when downstream behavior depends on it.
+For auto-promoted memories, the server-side classifier picks the type and may not pick the same one you would (see gotchas). For explicit writes via `bulkCreateLongTermMemories`, you pass `memoryType` yourself and the classifier is bypassed — prefer that path when downstream behavior depends on the type.
 
 ## Ownership model — `actorId` vs `ownerId`
 
@@ -118,7 +103,7 @@ Easy to confuse.
 
 Patterns:
 
-- **Per-user chatbot:** pass the user's stable id (callsign, internal user id) as `actorId` on user events; it implicitly becomes `ownerId` via the first-event rule. Set the same id as `ownerId` on long-term memories about the user.
+- **Per-user chatbot:** pass the user's stable id as `actorId` on user events; it implicitly becomes `ownerId` via the first-event rule. Set the same id as `ownerId` on long-term memories about the user.
 - **Multiple producer roles** sharing one store: give each role its own `ownerId` (e.g. `'app-listener'`, `'app-curator'`) and filter by it to slice memories by source.
 
 ## Gotchas
@@ -130,18 +115,18 @@ All empirical claims tested 2026-05 against the preview service — re-verify be
 - **First event's `actorId` becomes the session's `ownerId` permanently** — surfaced by `GetSessionMemoryResponseContent.ownerId` JSDoc; the REST docs don't spell it out.
 - **`actorId` is NOT filterable.** No `actorIdFilter` type; no read endpoint accepts an `actorId` predicate. Stored-and-returned but not a query axis.
 - **`createdAt` (client-supplied) vs `systemTimestamp` (server ingestion) can differ.** Use `createdAt` for "when the event happened."
-- **No in-session compaction.** A session is a single Redis JSON document; events accumulate until the TTL fires. "Summary" in the extraction-strategy list is about long-term extraction, not in-session collapse. Cap client-side for long-lived sessions.
+- **No in-session compaction.** A session is a single Redis JSON document; events accumulate until the TTL fires. Cap client-side for long-lived sessions.
 - **404 on `getSessionMemory` for new sessions is expected** — catch and treat as empty.
 - **Session-event `metadata` does NOT propagate to auto-promoted memories** — the extractor produces its own records.
 
 **Long-term memory**
 
 - **`createdAt` / `updatedAt` are SERVER-managed.** Not on `CreateMemoryRecord`, not on `UpdateLongTermMemoryRequestContent`. You **cannot backfill** a memory with the time the underlying event occurred — workaround: put the meaningful timestamp into the `text` so semantic search can match against it.
-- **Auto-promoted memories have empty `namespace` and `topics`.** Don't design filters that depend on auto-promotion tagging anything.
-- **Auto-classifier mis-types memories.** A clear preference (`"User is a fan of APRS"`) was filed as **episodic**, not semantic. If `memoryType` matters, set it explicitly via `bulkCreateLongTermMemories`.
-- **Auto-promotion is async and slow** — "many turns" delayed in practice. For deterministic timing or controlled metadata, write explicit memories.
+- **Auto-promoted memories arrive without `namespace` or `topics` populated.** Don't design filters that depend on auto-promotion tagging anything.
+- **On auto-promoted memories, the server-side classifier picks the `memoryType`.** In one test, a clear preference (`"User prefers dark mode"`) was classified as `episodic` rather than `semantic`. If `memoryType` matters to your downstream logic, write the memory explicitly via `bulkCreateLongTermMemories` — that path passes your `memoryType` straight through.
+- **Auto-promotion is asynchronous** and can lag the originating turn by many turns. For deterministic timing or controlled metadata, write explicit memories.
 - **No `actorId` / "memory creator" filter.** Discriminate sources via distinct `ownerId` values.
-- **Extraction strategies are opaque.** Docs name four (discrete, summary, preferences, custom) but don't define them; the strategy in use on your store is not exposed in the control panel or REST API. Treat as a black box.
+- **Auto-extractor behavior isn't currently client-configurable.** Plan around what you can write explicitly via `bulkCreateLongTermMemories`.
 - **Underlying storage:** long-term memories are Redis Hashes (one per memory); sessions are single JSON documents per session. Useful when probing via RedisInsight / `redis-cli`.
 
 ## Anti-patterns
@@ -150,7 +135,7 @@ All empirical claims tested 2026-05 against the preview service — re-verify be
 - **Do not hand-roll a fetch client.** Speakeasy generates the SDK from the service's OpenAPI spec — it's the canonical surface. Pin the version exactly (no caret) because the SDK is pre-1.0.
 - **Do not put markdown or JSON in the long-term `text` field expecting structured retrieval.** Semantic search embeds the text — prose embeds well, JSON syntax embeds poorly. Format as natural-language prose _describing_ the data.
 
-## Examples & References
+## Examples and References
 
 This skill keeps deeper content in two sibling folders:
 
@@ -190,11 +175,12 @@ This skill keeps deeper content in two sibling folders:
 
 In priority order:
 
-1. **Installed SDK `.d.ts` files** — `node_modules/@redis-iris/agent-memory/dist/commonjs/models/` for request/response shapes and filter types; `dist/commonjs/sdk/sdk.d.ts` for the `AgentMemory` class. Authoritative.
-2. **REST API examples** — https://redis.io/docs/latest/develop/ai/context-engine/agent-memory/api-examples/ — endpoint paths, example payloads, filter reference.
-3. **Service overview** — https://redis.io/docs/latest/develop/ai/context-engine/agent-memory/ — conceptual model, two-tier description, auto-promotion behavior.
-4. **REST API reference** — https://redis.io/docs/latest/develop/ai/context-engine/agent-memory/api-reference/ — full endpoint spec. Note: page is client-rendered; `curl` or non-JS WebFetch returns only the shell.
-5. **npm page** — https://www.npmjs.com/package/@redis-iris/agent-memory
-6. **Empirical probing** — RedisInsight or `redis-cli` against the underlying store. Reliable when docs are ambiguous.
+1. **Per-method docs in [`references/`](./references/)** — request/response shapes, filters, constraints, and notes for every SDK method. Extracted from the SDK's type definitions and verified empirically.
+2. **Raw SDK `.d.ts` files** — `node_modules/@redis-iris/agent-memory/dist/commonjs/models/` for request/response shapes and filter types; `dist/commonjs/sdk/sdk.d.ts` for the `AgentMemory` class. Authoritative when `references/` is ambiguous or stale.
+3. **REST API examples** — https://redis.io/docs/latest/develop/ai/context-engine/agent-memory/api-examples/ — endpoint paths, example payloads, filter reference.
+4. **Service overview** — https://redis.io/docs/latest/develop/ai/context-engine/agent-memory/ — conceptual model, two-tier description, auto-promotion behavior.
+5. **REST API reference** — https://redis.io/docs/latest/develop/ai/context-engine/agent-memory/api-reference/ — full endpoint spec. Note: page is client-rendered; `curl` or non-JS WebFetch returns only the shell.
+6. **npm page** — https://www.npmjs.com/package/@redis-iris/agent-memory
+7. **Empirical probing** — RedisInsight or `redis-cli` against the underlying store. Reliable when docs are ambiguous.
 
-**Do NOT use** the open-source `redis/agent-memory-server` GitHub repo. Cloud and OSS have diverged.
+**Do NOT use** the open-source `redis/agent-memory-server` GitHub repo. This is not the same product.

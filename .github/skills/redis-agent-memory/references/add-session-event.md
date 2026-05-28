@@ -18,7 +18,7 @@ import { MessageRole } from '@redis-iris/agent-memory/models'
 
 const result = await agentMemory.addSessionEvent({
   sessionId,
-  actorId: 'user-W8GUY',
+  actorId: 'user-alice',
   role: MessageRole.User,
   content: [{ text: userMessage }],
   createdAt: new Date(),

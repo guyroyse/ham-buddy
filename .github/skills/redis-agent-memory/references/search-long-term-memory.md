@@ -19,7 +19,7 @@ const response = await agentMemory.searchLongTermMemory({
   limit: 10,
   similarityThreshold: 0.5,
   filter: {
-    ownerId: { eq: 'user-W8GUY' },
+    ownerId: { eq: 'user-alice' },
     memoryType: { in: ['semantic', 'episodic'] },
     createdAt: { gte: new Date('2026-01-01') }
   },

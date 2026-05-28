@@ -16,8 +16,8 @@ updateLongTermMemory(
 
 ```ts
 const updated = await agentMemory.updateLongTermMemory(memoryId, {
-  topics: ['signal-reports', '20m-band'],
-  namespace: 'observed-receptions'
+  topics: ['onboarding', 'billing'],
+  namespace: 'user-events'
 })
 ```
 
