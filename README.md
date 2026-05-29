@@ -1,6 +1,6 @@
 # Earshot
 
-Earshot is a multi-agent demo of [Redis Agent Memory](https://redis.io/agent-memory/). Independent listener processes capture audio from ambient sources, transcribe and enrich it, and write each utterance to long-term memory. A separate chatbot reads from that same memory store and answers questions about what was heard.
+Earshot is a multi-agent demo of [Redis Agent Memory](https://redis.io/agent-memory/)—part of [Redis Iris](https://redis.io/iris). Independent listener processes capture audio from ambient sources, transcribe and enrich it, and write each utterance to long-term memory. A separate chatbot reads from that same memory store and answers questions about what was heard.
 
 The project ships with two listeners:
 
@@ -130,7 +130,24 @@ scripts/
 captures/            timestamped WAVs per session (gitignored)
 ```
 
-For a deep dive on architecture, data flow, and design decisions, see [.github/copilot-instructions.md](.github/copilot-instructions.md).
+For a block diagram of the three processes and the shared memory store, see [docs/architecture.md](docs/architecture.md). For a deep dive on data flow and design decisions, see [.github/copilot-instructions.md](.github/copilot-instructions.md).
+
+## Diagrams
+
+This application uses [Redis Iris](https://redis.io/iris).
+
+![](assets/redis-iris.svg)
+
+More diagrams can be found in [assets/](assets/):
+
+- [assets/earshot-design.md](assets/earshot-design.md) — the Earshot architecture diagram as raw Mermaid.
+- [assets/redis-iris.svg](assets/redis-iris.svg) — Redis Iris overview diagram.
+- Redis Iris product diagrams:
+  - [Redis Agent Memory](assets/redis-agent-memory.png)
+  - [Redis Context Retriever](assets/redis-context-retriever.png)
+  - [Redis Data Integrator](assets/redis-data-integrator.png)
+  - [LangCache](assets/redis-lang-cache.png).
+- [assets/outline.md](assets/outline.md) — running order for the livestream demo of this repo.
 
 ## License
 
