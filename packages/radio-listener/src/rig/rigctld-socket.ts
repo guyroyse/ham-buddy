@@ -22,7 +22,18 @@ export class RigCtlD_Socket {
 
   static async open(model: number, devicePath: string, baud: number, tcpPort = 4532): Promise<RigCtlD_Socket> {
     const proc = spawn('rigctld', ['-m', String(model), '-r', devicePath, '-s', String(baud), '-t', String(tcpPort)])
+
+    proc.on('error', (err) => console.error('rigctld failed to start:', err))
+    proc.on('exit', (code, sig) => {
+      if (code !== 0 && sig === null) console.error(`rigctld exited with code ${code}`)
+    })
+
     const socket = await connectWithRetry(tcpPort)
+
+    /* Long-lived handler — without it, a later socket error (rigctld crashes,
+       peer hangs up) becomes an unhandled 'error' event and crashes the process. */
+    socket.on('error', (err) => console.error('rigctld socket error:', err.message))
+
     const sock = new RigCtlD_Socket(proc, socket)
     socket.on('data', (chunk: Buffer) => sock.#onData(chunk))
     return sock

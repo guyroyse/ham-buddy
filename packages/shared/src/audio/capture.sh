@@ -14,9 +14,13 @@ AUDIO_DEVICE="${2:-0}"
 cleanup() { jobs -p | xargs -r kill 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
+# AVFoundation logs "Continuity Camera" warnings via NSLog directly, bypassing
+# ffmpeg's -loglevel. Filter them off stderr via process substitution so real
+# ffmpeg errors still get through.
 ffmpeg -hide_banner -loglevel error \
        -f avfoundation -i ":$AUDIO_DEVICE" \
        -ac 1 -ar 16000 -f s16le - \
+       2> >(grep -v 'WARNING:.*Continuity' >&2) \
   | sox -t raw -r 16000 -c 1 -b 16 -e signed-integer - \
         "$OUTPUT_TEMPLATE" \
         silence 1 0.1 1% 1 2.0 1% pad 0 0.5 \

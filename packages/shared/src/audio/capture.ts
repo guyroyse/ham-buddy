@@ -28,11 +28,27 @@ export async function* captureUtterances(
   /* Pattern for filenames—sox will append 001, 002, etc. to the filename. */
   const filenameTemplate = join(sessionFolder, 'utterance-.wav')
 
+  /* If the capture script dies, we need to end the watcher loop too — otherwise
+     it sits forever waiting for files that will never appear. Combine the
+     caller's signal with a local one we can fire from the spawn handlers. */
+  const scriptDied = new AbortController()
+  const lifecycleSignal = AbortSignal.any([signal, scriptDied.signal])
+
   /* Start watching the folder before spawning or we'll miss the first file. */
-  const folderWatcher = watch(sessionFolder, { signal })
+  const folderWatcher = watch(sessionFolder, { signal: lifecycleSignal })
 
   /* Run the script */
-  spawn(SCRIPT_PATH, [filenameTemplate, options.device], { signal, stdio: 'inherit' })
+  const child = spawn(SCRIPT_PATH, [filenameTemplate, options.device], { signal: lifecycleSignal, stdio: 'inherit' })
+
+  child.on('error', (err) => {
+    console.error('capture script failed to start:', err)
+    scriptDied.abort()
+  })
+
+  child.on('exit', (code, sig) => {
+    if (code !== 0 && sig === null) console.error(`capture script exited with code ${code}`)
+    scriptDied.abort()
+  })
 
   let currentFile: string | null = null
   try {
@@ -51,6 +67,7 @@ export async function* captureUtterances(
     }
   } catch (err) {
     if (signal.aborted) return
+    if (scriptDied.signal.aborted) throw new Error('capture pipeline died')
     throw err
   }
 }

@@ -11,7 +11,12 @@ process.on('SIGINT', () => {
 
 const repl = createInterface({ input: process.stdin, output: process.stdout })
 
-console.log(chalk.dim('Earshot Chat Bot — Ctrl+C to stop\n'))
+console.log(chalk.dim('Earshot Chat Bot — Ctrl+C to stop'))
+console.log()
+console.log(`${chalk.yellow('Memory:')}  ${config.memory.host} (store=${config.memory.storeId})`)
+console.log(`${chalk.yellow('User:')}    ${config.userName}`)
+console.log(`${chalk.yellow('Owner:')}   ${config.listenerOwnerId}`)
+console.log()
 
 const user = config.userName
 const userPrompt = `${chalk.cyan(user)}${chalk.dim('> ')}`

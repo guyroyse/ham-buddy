@@ -10,10 +10,13 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b && tsc-alias -f -p packages/shared/tsconfig.json && tsc-alias -f -p packages/radio-listener/tsconfig.json && tsc-alias -f -p packages/mic-listener/tsconfig.json && tsc-alias -f -p packages/chatbot/tsconfig.json",
-    "chat": "tsx --tsconfig packages/chatbot/tsconfig.json packages/chatbot/src/main.ts",
-    "listen": "tsx --tsconfig packages/radio-listener/tsconfig.json packages/radio-listener/src/main.ts",
-    "mic-listen": "tsx --tsconfig packages/mic-listener/tsconfig.json packages/mic-listener/src/main.ts",
+    "build": "tsc -b && tsc-alias -f -p packages/shared/tsconfig.json && tsc-alias -f -p packages/radio-listener/tsconfig.json && tsc-alias -f -p packages/mic-listener/tsconfig.json && tsc-alias -f -p packages/chatbot/tsconfig.json && cp packages/shared/src/audio/capture.sh packages/shared/dist/audio/capture.sh",
+    "chat": "node packages/chatbot/dist/main.js",
+    "chat:dev": "tsx --conditions=dev --tsconfig packages/chatbot/tsconfig.json packages/chatbot/src/main.ts",
+    "radio-listen": "node packages/radio-listener/dist/main.js",
+    "radio-listen:dev": "tsx --conditions=dev --tsconfig packages/radio-listener/tsconfig.json packages/radio-listener/src/main.ts",
+    "mic-listen": "node packages/mic-listener/dist/main.js",
+    "mic-listen:dev": "tsx --conditions=dev --tsconfig packages/mic-listener/tsconfig.json packages/mic-listener/src/main.ts",
     "devices": "tsx scripts/devices.ts"
   },
   "devDependencies": {
