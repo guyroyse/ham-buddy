@@ -19,15 +19,15 @@ console.log(`${chalk.yellow('Owner:')}   ${config.listenerOwnerId}`)
 console.log()
 
 const user = config.userName
-const userPrompt = `${chalk.cyan(user)}${chalk.dim('> ')}`
-const botLabel = `${chalk.yellow('Earshot')}${chalk.dim('> ')}`
+const userPrompt = `${chalk.blue.bold(user)}${chalk.dim('> ')}`
+const botLabel = `${chalk.red.bold('Earshot')}${chalk.dim('> ')}`
 
 try {
   while (true) {
     const message = (await repl.question(userPrompt)).trim()
     if (message === '') continue
     const reply = await chat(user, message)
-    console.log(`${botLabel}${reply}\n`)
+    console.log(`${botLabel}${chalk.bold.dim(reply)}`)
   }
 } catch (err) {
   console.error(chalk.red('error:'), (err as Error).message)
