@@ -1,12 +1,6 @@
 import chalk from 'chalk'
-import { ulid } from 'ulid'
 
-import { MemoryType } from '@redis-iris/agent-memory/models'
-
-import { config } from '@config/config'
-import { agentMemory } from '@memory/client'
 import { enrichTransmission } from '@enricher/enricher'
-
 import { captureTransmissions } from './transmissions.js'
 import { formatTransmission } from './format.js'
 
@@ -33,17 +27,4 @@ function logTransmission(description: string, audioPath: string, rawText: string
   console.log('')
 }
 
-async function storeMemory(description: string): Promise<void> {
-  const id = ulid()
-  const text = description
-  const memoryType = MemoryType.Episodic
-  const ownerId = config.listenerOwnerId
-
-  try {
-    await agentMemory.bulkCreateLongTermMemories({
-      memories: [{ id, text, memoryType, ownerId }]
-    })
-  } catch (err) {
-    console.error(chalk.red('store memory failed:'), err)
-  }
-}
+async function storeMemory(_description: string): Promise<void> {}
