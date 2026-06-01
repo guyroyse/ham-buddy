@@ -147,8 +147,9 @@ More diagrams can be found in [assets/](assets/):
   - [Redis Context Retriever](assets/redis-context-retriever.png)
   - [Redis Data Integrator](assets/redis-data-integrator.png)
   - [LangCache](assets/redis-lang-cache.png).
-- [assets/outline.md](assets/outline.md) — running order for the livestream demo of this repo.
 
 ## License
 
 MIT
+
+https://github.com/redis/agent-skills
